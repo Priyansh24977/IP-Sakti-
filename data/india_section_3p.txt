@@ -1,0 +1,9 @@
+Section 3(p) of the Patents Act, 1970 (India):
+
+What are not inventions - Section 3(p) states that an invention which, in effect, is traditional knowledge or which is an aggregation or duplication of known properties of traditionally known component or components, is not patentable under Indian law.
+
+This provision specifically excludes traditional knowledge from patent protection. Traditional knowledge refers to knowledge, innovations, and practices of indigenous and local communities, developed from experience gained over centuries, adapted to the local culture and environment.
+
+In the context of Ayurveda, classical formulations that are drawn directly from authoritative texts listed in the First Schedule (such as Charaka Samhita, Sushruta Samhita) are generally considered traditional knowledge and therefore fall under this exclusion. This means a company cannot patent a formulation that is simply reproducing or combining known traditional remedies.
+
+However, this exclusion does not apply to genuinely novel formulations, new drug delivery mechanisms, new extraction processes, or new combinations that show a technical advance over what is traditionally known and are not obvious to a person skilled in the art.
