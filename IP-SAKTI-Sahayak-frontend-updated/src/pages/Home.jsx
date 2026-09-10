@@ -7,6 +7,7 @@ import AnswerCard from "../components/AnswerCard";
 import SourcesCard from "../components/SourcesCard";
 import LoadingState from "../components/LoadingState";
 import HowItWorks from "../components/HowItWorks";
+import LanguageSelector from "../components/LanguageSelector";
 import { useAskSahayak } from "../hooks/useAskSahayak";
 import { PRODUCT_OPTIONS, DEMO_QUESTIONS } from "../constants/options";
 
@@ -14,20 +15,14 @@ export default function Home() {
   const [productType, setProductType] = useState("Proprietary Product");
   const [jurisdiction, setJurisdiction] = useState("India");
   const [question, setQuestion] = useState("");
-  const [showHindi, setShowHindi] = useState(false);
+  const [inputLanguage, setInputLanguage] = useState("English");
+  const [outputLanguage, setOutputLanguage] = useState("English");
   const { result, loading, error, ask } = useAskSahayak();
 
   async function handleSubmit(e) {
     e.preventDefault();
-
     if (!question.trim()) return;
-
-    await ask({
-      question,
-      productType,
-      jurisdiction,
-      translateToHindi: showHindi,
-    });
+    await ask({ question, productType, jurisdiction, inputLanguage, outputLanguage });
   }
 
   return (
@@ -45,14 +40,22 @@ export default function Home() {
             setJurisdiction={setJurisdiction}
             question={question}
             setQuestion={setQuestion}
-            showHindi={showHindi}
-            setShowHindi={setShowHindi}
             loading={loading}
             error={error}
             onSubmit={handleSubmit}
             productOptions={PRODUCT_OPTIONS}
           />
-          <DemoQuestions questions={DEMO_QUESTIONS} onSelect={setQuestion} />
+          <div className="side-column">
+            <div className="card language-card">
+              <div className="label">LANGUAGE</div>
+              <h2>Ask in your language</h2>
+              <div className="language-fields">
+                <LanguageSelector value={inputLanguage} onChange={setInputLanguage} label="Input language" />
+                <LanguageSelector value={outputLanguage} onChange={setOutputLanguage} label="Output language" />
+              </div>
+            </div>
+            <DemoQuestions questions={DEMO_QUESTIONS} onSelect={setQuestion} />
+          </div>
         </section>
 
         {loading && <LoadingState />}

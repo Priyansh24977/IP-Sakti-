@@ -2,16 +2,18 @@ export async function askSahayak({
   question,
   productType,
   jurisdiction,
-  translateToHindi = false,
+  inputLanguage = "English",
+  outputLanguage = "English",
 }) {
   const response = await fetch("/api/ask", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       question: question.trim(),
-      jurisdiction,
       productType,
-      translateToHindi,
+      jurisdiction,
+      inputLanguage,
+      outputLanguage,
     }),
   });
 

@@ -1,4 +1,4 @@
-import { AlertCircle, Globe2 } from "lucide-react";
+import { AlertCircle, Globe2, Languages, Timer } from "lucide-react";
 
 function renderInline(text) {
   const parts = text.split(/(\*\*.*?\*\*|\[Source \d+\])/g);
@@ -24,8 +24,8 @@ function renderInline(text) {
 
 function formatAnswer(answer = "") {
   const lines = answer
-  .replace(/\*\*svg.*?\*\*/gi, "")
-  .split("\n");
+    .replace(/^\*\*svg.*?\*\*/i, "")
+    .split("\n");
 
   const elements = [];
   let bullets = [];
@@ -102,24 +102,25 @@ export default function AnswerCard({ result }) {
       </div>
 
       <div className="answer-text">
-  {formatAnswer(result?.answer)}
-</div>
+        {formatAnswer(result?.answer)}
+      </div>
 
-{result?.answerHindi && (
-  <div className="answer-text hindi-answer">
-    <div className="hindi-label">
-      हिंदी में उत्तर · Hindi Translation
-    </div>
+      {result?.translatedAnswer && result.translatedAnswer !== result.answer && (
+        <div className="translated-answer">
+          <div className="translated-heading"><Languages size={14} /> Translated response · {result.outputLanguage || "Selected language"}</div>
+          <div className="answer-text">{formatAnswer(result.translatedAnswer)}</div>
+        </div>
+      )}
 
-    {formatAnswer(result.answerHindi)}
-  </div>
-)}
+      <div className="answer-meta">
+        <span><Globe2 size={12} /> {result?.jurisdiction || "Unclear"}</span>
+        <span><Languages size={12} /> {result?.inputLanguage || "English"} → {result?.outputLanguage || "English"}</span>
+        {result?.responseTime != null && <span><Timer size={12} /> {result.responseTime}s</span>}
+      </div>
 
-<div className="topic">
-  Detected topic: <b>{result?.topic || "general"}</b>
-</div>
-
-      
+      <div className="topic">
+        Detected topic: <b>{result?.topic || "general"}</b>
+      </div>
 
       <div className="disclaimer">
         <AlertCircle size={15} />

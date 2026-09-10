@@ -15,7 +15,7 @@ app.get("/api/health", (req, res) => {
 
 app.post("/api/ask", async (req, res) => {
   try {
-    const { question, jurisdiction, productType, translateToHindi } = req.body;
+    const { question, jurisdiction, productType, inputLanguage, outputLanguage } = req.body;
 
     if (!question || !question.trim()) {
       return res.status(400).json({
@@ -26,10 +26,8 @@ app.post("/api/ask", async (req, res) => {
     const result = await runRAG(question.trim(), {
       userJurisdiction: jurisdiction,
       userProductType: productType,
-      // Optional: when true, adds one extra Gemini call to translate the
-      // answer into Hindi. Off by default - only runs when the frontend
-      // explicitly asks for it (e.g. a "Show in Hindi" toggle).
-      translateToHindi: Boolean(translateToHindi),
+      inputLanguage: inputLanguage || "English",
+      outputLanguage: outputLanguage || "English",
     });
 
     res.json(result);

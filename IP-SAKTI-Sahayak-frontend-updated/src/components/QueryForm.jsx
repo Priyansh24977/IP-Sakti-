@@ -9,8 +9,6 @@ export default function QueryForm({
   setJurisdiction,
   question,
   setQuestion,
-  showHindi,
-  setShowHindi,
   loading,
   error,
   onSubmit,
@@ -35,32 +33,14 @@ export default function QueryForm({
           rows={5}
         />
       </label>
-<div className="form-bottom">
-  <div>
-    <span className="hint">
-      <MessageSquareText size={14} />
-      Grounded in retrieved sources.
-    </span>
 
-    <label className="hindi-toggle">
-      <input
-        type="checkbox"
-        checked={showHindi}
-        onChange={(e) => setShowHindi(e.target.checked)}
-      />
-      Show answer in Hindi too
-    </label>
-  </div>
-
-  <button className="ask-button" disabled={loading}>
-    {loading ? (
-      <LoaderCircle className="spin" size={17} />
-    ) : (
-      <ArrowUp size={17} />
-    )}
-    {loading ? "Thinking…" : "Ask Sahayak"}
-  </button>
-</div>
+      <div className="form-bottom">
+        <span className="hint"><MessageSquareText size={14} /> Grounded in retrieved sources.</span>
+        <button className="ask-button" disabled={loading}>
+          {loading ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={17} />}
+          {loading ? "Thinking…" : "Ask Sahayak"}
+        </button>
+      </div>
 
       {error && <div className="error"><AlertCircle size={16} />{error}</div>}
     </form>

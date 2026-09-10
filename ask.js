@@ -1,179 +1,484 @@
 // ask.js
-// PURPOSE: Take a user's question, find the most relevant document chunks
-// (using cosine similarity between embeddings), then send those chunks +
-// the question to Gemini to generate a grounded, cited answer.
+// PURPOSE:
+// 1. Translate user input if required
+// 2. Classify jurisdiction/topic
+// 3. Create query embedding
+// 4. Retrieve relevant legal sources using cosine similarity
+// 5. Generate grounded answer using AICredits + Gemini 3.1 Flash Lite
+// 6. Translate final answer if required
 //
-// Run with: node ask.js "your question here"
+// Run with:
+// node ask.js "your question here"
 
+import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import fs from "fs";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { translateWithBhashini } from "./bhashini.js";
 
 dotenv.config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
-// Using "-latest" alias so this doesn't break again when Google retires
-// today's specific model version (they do this every few months).
-const chatModel = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const VECTOR_STORE_FILE = path.join(__dirname, "vector_store.json");
+// ==================================================
+// AI CONFIGURATION
+// ==================================================
 
-// STEP A: Cosine similarity - a simple math formula that measures how
-// "close in meaning" two embedding vectors are. Returns a value between
-// -1 and 1; closer to 1 means more similar in meaning.
-function cosineSimilarity(vecA, vecB) {
-  let dotProduct = 0, normA = 0, normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
+// AICredits - chat / translation / classification
+const ai = new OpenAI({
+  baseURL:
+    process.env.AICREDITS_BASE_URL ||
+    "https://api.aicredits.in/v1",
+
+  apiKey: process.env.AICREDITS_API_KEY,
+});
+
+// Google Gemini - embeddings
+// Kept unchanged so the existing vector_store.json
+// remains compatible with the same embedding model.
+const genAI = new GoogleGenerativeAI(
+  process.env.GEMINI_API_KEY
+);
+
+const embeddingModel =
+  genAI.getGenerativeModel({
+    model: "gemini-embedding-001",
+  });
+
+// AICredits model
+const CHAT_MODEL =
+  "google/gemini-3.1-flash-lite";
+
+const VECTOR_STORE_FILE =
+  path.join(__dirname, "vector_store.json");
+
+// ==================================================
+// VALIDATE AI CREDENTIALS
+// ==================================================
+
+function validateAICredits() {
+  if (!process.env.AICREDITS_API_KEY) {
+    throw new Error(
+      "Missing AICREDITS_API_KEY in .env"
+    );
   }
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error(
+      "Missing GEMINI_API_KEY in .env"
+    );
+  }
 }
 
-// STEP B: Classify the query - simple version of your "jurisdiction/
-// formulation classification" differentiator. We just ask Gemini directly.
-//
-// This is now a FALLBACK, only called when the user hasn't explicitly
-// picked a jurisdiction from the UI dropdown. When they have, we skip
-// this entirely - it's faster (one less API call) and more reliable
-// (no risk of the model misreading an ambiguous question).
-async function classifyQuery(question) {
+// ==================================================
+// AICREDITS CHAT HELPER
+// ==================================================
+
+async function callAI(
+  messages,
+  options = {}
+) {
+  validateAICredits();
+
+  const response =
+    await ai.chat.completions.create({
+      model: CHAT_MODEL,
+
+      messages,
+
+      temperature:
+        options.temperature ?? 0.2,
+
+      max_tokens:
+        options.max_tokens ?? 1500,
+    });
+
+  const text =
+    response?.choices?.[0]?.message?.content;
+
+  if (!text) {
+    throw new Error(
+      "AICredits returned an empty response."
+    );
+  }
+
+  return text.trim();
+}
+
+// ==================================================
+// STEP A
+// COSINE SIMILARITY
+// ==================================================
+
+function cosineSimilarity(
+  vecA,
+  vecB
+) {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (
+    let i = 0;
+    i < vecA.length;
+    i++
+  ) {
+    dotProduct +=
+      vecA[i] * vecB[i];
+
+    normA +=
+      vecA[i] * vecA[i];
+
+    normB +=
+      vecB[i] * vecB[i];
+  }
+
+  const denominator =
+    Math.sqrt(normA) *
+    Math.sqrt(normB);
+
+  if (denominator === 0) {
+    return 0;
+  }
+
+  return dotProduct / denominator;
+}
+
+// ==================================================
+// STEP B
+// CLASSIFY QUERY
+// ==================================================
+
+async function classifyQuery(
+  question
+) {
   const prompt = `You are a classifier for an Ayurveda IP legal assistant.
 
 Classify the user's question into exactly one jurisdiction:
+
 - India
 - US
 - Unclear
 
-Use US when the question explicitly mentions the United States, USA, US,
-USPTO, American patent law, FDA, or US regulations.
+Use US when the question explicitly mentions:
+United States, USA, US, USPTO, American patent law, FDA, or US regulations.
 
-Use India when the question explicitly mentions India, Indian patent law,
-Indian regulations, IPO, TKDL, AYUSH, etc.
+Use India when the question explicitly mentions:
+India, Indian patent law, Indian regulations, IPO, TKDL, AYUSH, etc.
 
 If no jurisdiction can be confidently determined, use Unclear.
 
 Respond with ONLY a JSON object:
-{"jurisdiction":"India" or "US" or "Unclear","topic":"short 2-4 word topic"}
+{
+  "jurisdiction": "India" or "US" or "Unclear",
+  "topic": "short 2-4 word topic"
+}
 
-Question: "${question}"`;
-
-  const result = await chatModel.generateContent(prompt);
-  const text = result.response.text().trim();
+Question:
+${question}`;
 
   try {
-    const cleaned = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(cleaned);
+    const text = await callAI(
+      [
+        {
+          role: "system",
+          content:
+            "You classify Ayurveda IP questions. Return only valid JSON when requested.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      {
+        temperature: 0,
+        max_tokens: 100,
+      }
+    );
+
+    const cleaned =
+      text
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+
+    const parsed =
+      JSON.parse(cleaned);
+
+    return {
+      jurisdiction:
+        parsed.jurisdiction ||
+        "Unclear",
+
+      topic:
+        parsed.topic ||
+        "general",
+    };
   } catch {
     return {
       jurisdiction: "Unclear",
-      topic: "general"
+      topic: "general",
     };
   }
 }
 
-// Extracts just a "topic" label even when jurisdiction is already known
-// from the UI - we still want a short topic tag for display, just without
-// re-deciding jurisdiction.
-async function extractTopicOnly(question) {
-  const prompt = `In 2-4 words, what is the short topic of this Ayurveda IP
-question? Respond with ONLY the topic phrase, nothing else.
+// ==================================================
+// EXTRACT TOPIC ONLY
+// ==================================================
 
-Question: "${question}"`;
+async function extractTopicOnly(
+  question
+) {
+  const prompt = `In 2-4 words, identify the short topic of this Ayurveda IP question.
+
+Respond with ONLY the topic phrase.
+
+Question:
+${question}`;
 
   try {
-    const result = await chatModel.generateContent(prompt);
-    return result.response.text().trim().replace(/^"|"$/g, "");
+    const text = await callAI(
+      [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      {
+        temperature: 0,
+        max_tokens: 30,
+      }
+    );
+
+    return text
+      .replace(/^"|"$/g, "")
+      .trim();
+
   } catch {
     return "general";
   }
 }
 
-// STEP C: Retrieve the top-N most relevant chunks for this question.
-// If a jurisdiction is known (India or US), we filter the candidate pool
-// to only that jurisdiction's documents BEFORE ranking by similarity -
-// this prevents an India question from citing a US-only document (or
-// vice versa) just because the topics are conceptually similar.
-// Documents are expected to be named with a "india_" or "us_" prefix;
-// any file without a recognized prefix is treated as jurisdiction-neutral
-// and stays eligible for every jurisdiction.
-function filterByJurisdiction(vectorStore, jurisdiction) {
-  if (!jurisdiction || jurisdiction === "Unclear" || jurisdiction === "Both") {
-    return vectorStore; // no filtering - search everything
+// ==================================================
+// STEP C
+// FILTER DOCUMENTS BY JURISDICTION
+// ==================================================
+
+function filterByJurisdiction(
+  vectorStore,
+  jurisdiction
+) {
+  if (
+    !jurisdiction ||
+    jurisdiction === "Unclear" ||
+    jurisdiction === "Both"
+  ) {
+    return vectorStore;
   }
 
-  const prefix = jurisdiction.toLowerCase() === "india" ? "india_" : "us_";
+  const prefix =
+    jurisdiction.toLowerCase() === "india"
+      ? "india_"
+      : "us_";
 
-  return vectorStore.filter(item => {
-    const filename = item.source.toLowerCase();
-    const hasAnyPrefix = filename.startsWith("india_") || filename.startsWith("us_");
-    // Keep it if it matches this jurisdiction's prefix, OR if the file
-    // has no jurisdiction prefix at all (treated as neutral/shared).
-    return filename.startsWith(prefix) || !hasAnyPrefix;
-  });
+  return vectorStore.filter(
+    (item) => {
+      const filename =
+        item.source.toLowerCase();
+
+      const hasAnyPrefix =
+        filename.startsWith("india_") ||
+        filename.startsWith("us_");
+
+      return (
+        filename.startsWith(prefix) ||
+        !hasAnyPrefix
+      );
+    }
+  );
 }
 
-async function retrieveRelevantChunks(question, vectorStore, jurisdiction, topN = 3) {
-  const filteredStore = filterByJurisdiction(vectorStore, jurisdiction);
+// ==================================================
+// STEP D
+// RETRIEVE RELEVANT CHUNKS
+// ==================================================
 
-  const questionEmbeddingResult = await embeddingModel.embedContent(question);
-  const questionEmbedding = questionEmbeddingResult.embedding.values;
+async function retrieveRelevantChunks(
+  question,
+  vectorStore,
+  jurisdiction,
+  topN = 3
+) {
+  const filteredStore =
+    filterByJurisdiction(
+      vectorStore,
+      jurisdiction
+    );
 
-  const scored = filteredStore.map(item => ({
-    ...item,
-    score: cosineSimilarity(questionEmbedding, item.embedding),
-  }));
+  const questionEmbeddingResult =
+    await embeddingModel.embedContent(
+      question
+    );
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topN);
+  const questionEmbedding =
+    questionEmbeddingResult
+      .embedding.values;
+
+  const scored =
+    filteredStore.map(
+      (item) => ({
+        ...item,
+
+        score:
+          cosineSimilarity(
+            questionEmbedding,
+            item.embedding
+          ),
+      })
+    );
+
+  scored.sort(
+    (a, b) =>
+      b.score - a.score
+  );
+
+  return scored.slice(
+    0,
+    topN
+  );
 }
 
-// STEP D: Generate the final answer, grounded in the retrieved chunks.
-// Retry logic covers two distinct failure modes:
-// - 503 (server overloaded): usually resolves within a couple seconds
-// - 429 (rate limit / quota exceeded): free-tier allows only ~5 requests
-//   per minute, so this needs a much longer wait before retrying
-async function generateAnswer(question, relevantChunks, classification, productType, retries = 3) {
-  const context = relevantChunks
-    .map((c, i) => `[Source ${i + 1}: ${c.source}]\n${c.text}`)
-    .join("\n\n---\n\n");
+// ==================================================
+// STEP E
+// GENERATE GROUNDED ANSWER
+// ==================================================
 
-  const productContext = productType
-    ? `\nThe user has indicated this concerns a: ${productType}.`
-    : "";
+async function generateAnswer(
+  question,
+  relevantChunks,
+  classification,
+  productType,
+  retries = 4
+) {
+  const context =
+    relevantChunks
+      .map(
+        (c, i) =>
+          `[Source ${i + 1}: ${c.source}]\n${c.text}`
+      )
+      .join(
+        "\n\n---\n\n"
+      );
+
+  const productContext =
+    productType
+      ? `\nThe user has indicated this concerns a: ${productType}.`
+      : "";
 
   const prompt = `You are IP-SAKTI Sahayak, an AI assistant for Ayurveda IP and regulatory guidance.
-Query classification: Jurisdiction = ${classification.jurisdiction}, Topic = ${classification.topic}${productContext}
 
-Answer the user's question using ONLY the information in the sources below.
-Cite which source number you used for each claim. If the sources don't contain
-enough information to answer confidently, say so clearly instead of guessing.
+Query classification:
+Jurisdiction = ${classification.jurisdiction}
+Topic = ${classification.topic}
+${productContext}
+
+IMPORTANT RULES:
+
+1. Answer ONLY using the information contained in the provided sources.
+2. Do not invent laws, sections, regulations, cases, or requirements.
+3. Clearly distinguish India and US requirements.
+4. Cite the source number for claims.
+5. If the sources do not contain enough information, explicitly say that the available sources are insufficient.
+6. Do not present the answer as a substitute for professional legal advice.
+7. Keep the answer clear and practical.
+8. Preserve legal section numbers, Act names, organization names, and technical terms.
 
 SOURCES:
+
 ${context}
 
-USER QUESTION: ${question}
+USER QUESTION:
 
-Provide a clear, well-cited answer:`;
+${question}
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
+Provide a clear, grounded and cited answer.`;
+
+  for (
+    let attempt = 1;
+    attempt <= retries;
+    attempt++
+  ) {
     try {
-      const result = await chatModel.generateContent(prompt);
-      return result.response.text();
-    } catch (err) {
-      const is503 = err.message.includes("503") || err.message.includes("overloaded");
-      const is429 = err.message.includes("429") || err.message.includes("Too Many Requests") || err.message.includes("quota");
+      return await callAI(
+        [
+          {
+            role: "system",
+            content:
+              "You are IP-SAKTI Sahayak. You must strictly follow the provided legal sources and never fabricate legal information.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        {
+          temperature: 0.1,
+          max_tokens: 1800,
+        }
+      );
 
-      if ((is503 || is429) && attempt < retries) {
-        const waitTime = is429 ? 15000 : 2000; // 429s need a much longer wait than 503s
-        console.log(`   ⏳ ${is429 ? "Rate limited" : "Server busy"}, retrying in ${waitTime / 1000}s (${attempt}/${retries})...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+    } catch (err) {
+      const message =
+        err?.message || "";
+
+      const is429 =
+        message.includes("429") ||
+        message.includes(
+          "Too Many Requests"
+        ) ||
+        message.includes(
+          "rate"
+        );
+
+      const is5xx =
+        message.includes("500") ||
+        message.includes("502") ||
+        message.includes("503") ||
+        message.includes("504");
+
+      const isNetworkError =
+        message.includes(
+          "fetch failed"
+        );
+
+      if (
+        (is429 ||
+          is5xx ||
+          isNetworkError) &&
+        attempt < retries
+      ) {
+        const waitTime =
+          is429
+            ? 5000
+            : 2000;
+
+        console.log(
+          `   ⏳ Retrying in ${
+            waitTime / 1000
+          }s (${attempt}/${retries})...`
+        );
+
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              waitTime
+            )
+        );
+
       } else {
         throw err;
       }
@@ -181,153 +486,465 @@ Provide a clear, well-cited answer:`;
   }
 }
 
-// STEP E (optional): Translate the final English answer into Hindi.
-// This is a deliberately simple, scoped-down multilingual feature - a
-// single extra Gemini call after generation, rather than a full Bhashini
-// integration. It demonstrates real multilingual capability without the
-// added complexity of translating retrieval/embeddings themselves.
-// Legal/technical terms (Section numbers, Act names, "TKDL", etc.) are
-// kept in English since they don't have standard Hindi equivalents and
-// translating them could cause confusion in a legal context.
-async function translateToHindi(englishAnswer, retries = 2) {
-  const prompt = `Translate the following legal/IP guidance text into clear,
-natural Hindi. Keep these items in English/untranslated since they are
-proper nouns or standard legal/technical terms with no standard Hindi
-equivalent: Act names (e.g. "Patents Act, 1970"), Section numbers (e.g.
-"Section 3(p)"), acronyms (TKDL, USPTO, IP, RAG), and citation tags like
-"[Source 1]". Translate everything else naturally into Hindi.
+// ==================================================
+// STEP F
+// INPUT TRANSLATION
+// ==================================================
 
-TEXT TO TRANSLATE:
-${englishAnswer}
+async function translateInputToEnglish(
+  question,
+  inputLanguage
+) {
+  if (
+    !question ||
+    !inputLanguage ||
+    inputLanguage === "English"
+  ) {
+    return question;
+  }
 
-Hindi translation:`;
+  // ----------------------------------------------
+  // Try Bhashini first
+  // ----------------------------------------------
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const result = await chatModel.generateContent(prompt);
-      return result.response.text().trim();
-    } catch (err) {
-      const isRetryable = err.message.includes("503") || err.message.includes("429");
-      if (isRetryable && attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      } else {
-        // Translation is a bonus feature - if it fails, we don't want
-        // to break the whole response. Return null and let the caller
-        // fall back to showing English only.
-        console.log("   ⚠️  Hindi translation failed, continuing with English only.");
-        return null;
+  try {
+    const translated =
+      await translateWithBhashini(
+        question,
+        inputLanguage,
+        "English"
+      );
+
+    console.log(
+      `   🌐 Input translated via Bhashini (${inputLanguage} → English)`
+    );
+
+    return translated;
+
+  } catch (bhashiniErr) {
+    console.log(
+      `   ⚠️ Bhashini input translation failed (${bhashiniErr.message})`
+    );
+
+    console.log(
+      "   ↪ Using AICredits Gemini translation..."
+    );
+  }
+
+  // ----------------------------------------------
+  // AICredits Gemini fallback
+  // ----------------------------------------------
+
+  try {
+    const prompt = `Translate the following question from ${inputLanguage} to English.
+
+Preserve the exact legal meaning and intent.
+
+Do not explain the translation.
+
+Return ONLY the translated question.
+
+QUESTION:
+${question}`;
+
+    return await callAI(
+      [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      {
+        temperature: 0,
+        max_tokens: 500,
       }
-    }
+    );
+
+  } catch (err) {
+    console.log(
+      `   ⚠️ Gemini translation failed: ${err.message}`
+    );
+
+    console.log(
+      "   ↪ Proceeding with original text."
+    );
+
+    return question;
   }
 }
 
+// ==================================================
+// STEP G
+// OUTPUT TRANSLATION
+// ==================================================
 
-// options: { userJurisdiction, userProductType, translateToHindi }
-// When userJurisdiction is provided (e.g. from a UI dropdown: "India" or "US"),
-// we trust it directly and skip the classification API call entirely.
-// When it's missing/empty, we fall back to asking Gemini to classify from
-// the question text, same as the original CLI-only behavior.
-export async function runRAG(question, options = {}) {
-  const { userJurisdiction, userProductType, translateToHindi: wantHindi } = options;
+async function translateAnswer(
+  text,
+  targetLanguage
+) {
+  if (
+    !text ||
+    targetLanguage === "English"
+  ) {
+    return null;
+  }
 
-  if (!fs.existsSync(VECTOR_STORE_FILE)) {
+  // ----------------------------------------------
+  // Try Bhashini first
+  // ----------------------------------------------
+
+  try {
+    const translated =
+      await translateWithBhashini(
+        text,
+        "English",
+        targetLanguage
+      );
+
+    console.log(
+      `   🌐 Translated via Bhashini (English → ${targetLanguage})`
+    );
+
+    return translated;
+
+  } catch (bhashiniErr) {
+    console.log(
+      `   ⚠️ Bhashini output translation failed (${bhashiniErr.message})`
+    );
+
+    console.log(
+      "   ↪ Using AICredits Gemini translation..."
+    );
+  }
+
+  // ----------------------------------------------
+  // AICredits Gemini fallback
+  // ----------------------------------------------
+
+  try {
+    const prompt = `Translate the following legal/IP guidance text into clear, natural ${targetLanguage}.
+
+IMPORTANT:
+
+- Preserve the exact meaning.
+- Keep Act names in English.
+- Keep Section numbers unchanged.
+- Keep organization names unchanged.
+- Keep acronyms such as TKDL, USPTO, IP and RAG unchanged.
+- Keep citation tags such as [Source 1], [Source 2] unchanged.
+- Do not add new legal information.
+- Do not remove any claims or citations.
+
+TEXT:
+
+${text}
+
+Return ONLY the translated text.`;
+
+    return await callAI(
+      [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      {
+        temperature: 0.1,
+        max_tokens: 2000,
+      }
+    );
+
+  } catch (err) {
+    console.log(
+      `   ⚠️ Gemini output translation failed: ${err.message}`
+    );
+
+    return null;
+  }
+}
+
+// ==================================================
+// MAIN RAG FUNCTION
+// ==================================================
+
+export async function runRAG(
+  question,
+  options = {}
+) {
+  const {
+    userJurisdiction,
+    userProductType,
+    inputLanguage = "English",
+    outputLanguage = "English",
+  } = options;
+
+  validateAICredits();
+
+  if (
+    !fs.existsSync(
+      VECTOR_STORE_FILE
+    )
+  ) {
     throw new Error(
       "No vector_store.json found. Run 'npm run embed' first."
     );
   }
 
-  const startTime = Date.now();
+  const startTime =
+    Date.now();
 
-  const vectorStore = JSON.parse(
-    fs.readFileSync(VECTOR_STORE_FILE, "utf-8")
-  );
+  // ----------------------------------------------
+  // 1. Translate input
+  // ----------------------------------------------
+
+  const englishQuestion =
+    await translateInputToEnglish(
+      question,
+      inputLanguage
+    );
+
+  // ----------------------------------------------
+  // 2. Load vector store
+  // ----------------------------------------------
+
+  const vectorStore =
+    JSON.parse(
+      fs.readFileSync(
+        VECTOR_STORE_FILE,
+        "utf-8"
+      )
+    );
+
+  // ----------------------------------------------
+  // 3. Determine jurisdiction
+  // ----------------------------------------------
 
   let classification;
-  if (userJurisdiction && userJurisdiction !== "Unclear") {
-    // Trust the user's explicit dropdown selection - skip classification
-    // API call, just extract a short topic label for display purposes.
-    const topic = await extractTopicOnly(question);
-    classification = { jurisdiction: userJurisdiction, topic };
+
+  if (
+    userJurisdiction &&
+    userJurisdiction !== "Unclear"
+  ) {
+    const topic =
+      await extractTopicOnly(
+        englishQuestion
+      );
+
+    classification = {
+      jurisdiction:
+        userJurisdiction,
+
+      topic,
+    };
+
   } else {
-    // No explicit jurisdiction given - fall back to auto-classification.
-    classification = await classifyQuery(question);
+    classification =
+      await classifyQuery(
+        englishQuestion
+      );
   }
 
-  const relevantChunks = await retrieveRelevantChunks(
-    question,
-    vectorStore,
-    classification.jurisdiction
-  );
+  // ----------------------------------------------
+  // 4. Retrieve sources
+  // ----------------------------------------------
 
-  const answer = await generateAnswer(
-    question,
-    relevantChunks,
-    classification,
-    userProductType
-  );
+  const relevantChunks =
+    await retrieveRelevantChunks(
+      englishQuestion,
+      vectorStore,
+      classification.jurisdiction
+    );
 
-  // Hindi translation only runs if explicitly requested - keeps the
-  // default (English-only) path fast and avoids an extra API call
-  // (and extra rate-limit risk) when the user hasn't asked for it.
-  let answerHindi = null;
-  if (wantHindi) {
-    answerHindi = await translateToHindi(answer);
-  }
+  // ----------------------------------------------
+  // 5. Generate grounded answer
+  // ----------------------------------------------
 
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  const answer =
+    await generateAnswer(
+      englishQuestion,
+      relevantChunks,
+      classification,
+      userProductType
+    );
+
+  // ----------------------------------------------
+  // 6. Translate final answer
+  // ----------------------------------------------
+
+  const translatedAnswer =
+    await translateAnswer(
+      answer,
+      outputLanguage
+    );
+
+  const elapsed =
+    (
+      (Date.now() - startTime) /
+      1000
+    ).toFixed(2);
 
   return {
     answer,
-    answerHindi,
-    jurisdiction: classification.jurisdiction,
-    topic: classification.topic,
-    productType: userProductType || null,
-    sources: relevantChunks.map(chunk => ({
-      source: chunk.source,
-      score: Number(chunk.score.toFixed(3))
-    })),
-    responseTime: Number(elapsed)
+
+    translatedAnswer,
+
+    inputLanguage,
+
+    outputLanguage,
+
+    originalQuestion:
+      question,
+
+    englishQuestion,
+
+    jurisdiction:
+      classification.jurisdiction,
+
+    topic:
+      classification.topic,
+
+    productType:
+      userProductType || null,
+
+    sources:
+      relevantChunks.map(
+        (chunk) => ({
+          source:
+            chunk.source,
+
+          score:
+            Number(
+              chunk.score.toFixed(3)
+            ),
+        })
+      ),
+
+    responseTime:
+      Number(elapsed),
   };
 }
 
+// ==================================================
+// CLI TEST
+// ==================================================
+
 async function main() {
-  const question = process.argv.slice(2).join(" ");
+  const question =
+    process.argv
+      .slice(2)
+      .join(" ");
+
   if (!question) {
-    console.log('Usage: node ask.js "your question here"');
+    console.log(
+      'Usage: node ask.js "your question here"'
+    );
+
     return;
   }
 
-  if (!fs.existsSync(VECTOR_STORE_FILE)) {
-    console.log("⚠️  No vector_store.json found. Run 'npm run embed' first.");
+  if (
+    !fs.existsSync(
+      VECTOR_STORE_FILE
+    )
+  ) {
+    console.log(
+      "⚠️ No vector_store.json found. Run 'npm run embed' first."
+    );
+
     return;
   }
 
-  const startTime = Date.now();
-  const vectorStore = JSON.parse(fs.readFileSync(VECTOR_STORE_FILE, "utf-8"));
+  const startTime =
+    Date.now();
 
-  console.log(`\n❓ Question: ${question}\n`);
+  const vectorStore =
+    JSON.parse(
+      fs.readFileSync(
+        VECTOR_STORE_FILE,
+        "utf-8"
+      )
+    );
 
-  console.log("🔍 Classifying query...");
-  const classification = await classifyQuery(question);
-  console.log(`   → Jurisdiction: ${classification.jurisdiction}, Topic: ${classification.topic}`);
-
-  console.log("📚 Retrieving relevant sources...");
-  const relevantChunks = await retrieveRelevantChunks(question, vectorStore, classification.jurisdiction);
-  relevantChunks.forEach((c, i) =>
-    console.log(`   ${i + 1}. ${c.source} (similarity: ${c.score.toFixed(3)})`)
+  console.log(
+    `\n❓ Question: ${question}\n`
   );
 
-  console.log("\n🤖 Generating answer...\n");
-  const answer = await generateAnswer(question, relevantChunks, classification);
+  console.log(
+    "🔍 Classifying query..."
+  );
 
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  const classification =
+    await classifyQuery(
+      question
+    );
 
-  console.log("─".repeat(60));
+  console.log(
+    `   → Jurisdiction: ${classification.jurisdiction}, Topic: ${classification.topic}`
+  );
+
+  console.log(
+    "📚 Retrieving relevant sources..."
+  );
+
+  const relevantChunks =
+    await retrieveRelevantChunks(
+      question,
+      vectorStore,
+      classification.jurisdiction
+    );
+
+  relevantChunks.forEach(
+    (c, i) =>
+      console.log(
+        `   ${i + 1}. ${c.source} (similarity: ${c.score.toFixed(3)})`
+      )
+  );
+
+  console.log(
+    "\n🤖 Generating answer with AICredits + Gemini 3.1 Flash Lite...\n"
+  );
+
+  const answer =
+    await generateAnswer(
+      question,
+      relevantChunks,
+      classification
+    );
+
+  const elapsed =
+    (
+      (Date.now() - startTime) /
+      1000
+    ).toFixed(2);
+
+  console.log(
+    "─".repeat(60)
+  );
+
   console.log(answer);
-  console.log("─".repeat(60));
-  console.log(`\n⏱️  Response time: ${elapsed}s`);
+
+  console.log(
+    "─".repeat(60)
+  );
+
+  console.log(
+    `\n⏱️ Response time: ${elapsed}s`
+  );
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch(err => console.error("❌ Error:", err.message));
+// ==================================================
+// DIRECT EXECUTION
+// ==================================================
+
+if (
+  process.argv[1] ===
+  fileURLToPath(import.meta.url)
+) {
+  main().catch(
+    (err) =>
+      console.error(
+        "❌ Error:",
+        err.message
+      )
+  );
 }
