@@ -11,7 +11,7 @@ export default function Header() {
         </div>
       </div>
       <div className="prototype-pill">
-        <ShieldCheck size={14} /> RAG PROTOTYPE
+        <ShieldCheck size={14} /> MADE BY TEAM SRIJAN
       </div>
     </header>
   );
