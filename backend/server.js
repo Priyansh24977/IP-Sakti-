@@ -3,13 +3,16 @@ import cors from "cors";
 import { runRAG } from "./ask.js";
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 app.use(
   cors({
-    origin: ["https://ip-shakti-shayak.vercel.app", "http://localhost:5173"],
-    methods: "*",
-    allowedHeaders: "*",
+    origin: [
+      "http://localhost:5173"
+      
+    ],
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
   })
 );
 
@@ -24,7 +27,13 @@ app.get("/api/health", (req, res) => {
 
 app.post("/api/ask", async (req, res) => {
   try {
-    const { question, jurisdiction, productType, inputLanguage, outputLanguage } = req.body;
+    const {
+      question,
+      jurisdiction,
+      productType,
+      inputLanguage,
+      outputLanguage,
+    } = req.body;
 
     if (!question || !question.trim()) {
       return res.status(400).json({
@@ -49,6 +58,6 @@ app.post("/api/ask", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`IP-SAKTI Sahayak API running at http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`IP-SAKTI Sahayak API running on port ${PORT}`);
 });
