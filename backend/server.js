@@ -8,8 +8,8 @@ const PORT = process.env.PORT || 5000;
 app.use(
   cors({
     origin: [
-      "http://localhost:5173"
-      
+      "https://ip-sakti-drab.vercel.app",
+      "http://localhost:5173",
     ],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
