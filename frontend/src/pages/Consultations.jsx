@@ -40,25 +40,46 @@ export default function Consultations() {
   }
 
   async function handleDelete(id) {
-  const confirmed = window.confirm(
-    "Are you sure you want to delete this consultation?"
-  );
+  setError("");
 
-  if (!confirmed) return;
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  const { error } = await supabase
+  if (!user) {
+    setError("Please login again.");
+    return;
+  }
+
+  console.log("Deleting:", id);
+  console.log("Current user:", user.id);
+
+  const { data, error } = await supabase
     .from("consultations")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .select();
 
-    if (error) {
-      console.error(error);
-      setError("Unable to delete consultation.");
-      return;
-    }
+  console.log("Delete result:", data);
+  console.log("Delete error:", error);
 
-    setConsultations((prev) => prev.filter((item) => item.id !== id));
+  if (error) {
+    setError(error.message);
+    return;
   }
+
+  if (!data || data.length === 0) {
+    setError(
+      "Consultation was not deleted. Check the RLS policy."
+    );
+    return;
+  }
+
+  setConsultations((prev) =>
+    prev.filter((item) => item.id !== id)
+  );
+}
 
   if (loading) {
     return (
