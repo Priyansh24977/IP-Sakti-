@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { runRAG } from "./ask.js";
+import { requireAuth } from "./authMiddleware.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -12,7 +13,7 @@ app.use(
       "http://localhost:5173",
     ],
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
@@ -25,7 +26,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.post("/api/ask", async (req, res) => {
+app.post("/api/ask", requireAuth, async (req, res) => {
   try {
     const {
       question,
