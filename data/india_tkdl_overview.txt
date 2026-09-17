@@ -1,9 +1,0 @@
-Traditional Knowledge Digital Library (TKDL):
-
-The TKDL is a database maintained by India that documents traditional medicinal knowledge from Ayurveda, Unani, Siddha, and Yoga systems in a format that patent examiners across the world can search and understand. It was created specifically to prevent the misappropriation of India's traditional knowledge through wrongly granted patents in foreign countries.
-
-The TKDL translates ancient formulations and practices, originally recorded in Sanskrit, Arabic, Persian, and Tamil texts, into five international languages (English, French, German, Japanese, and Spanish) and classifies them using a special Traditional Knowledge Resource Classification (TKRC) system that is linked to the International Patent Classification (IPC) system.
-
-Patent offices in several countries, including the European Patent Office (EPO) and the United States Patent and Trademark Office (USPTO), have access agreements with TKDL, allowing their examiners to check whether a patent application claiming a traditional remedy is actually already known, and therefore not novel.
-
-For an Ayurveda-based startup or researcher, TKDL serves two purposes: first, as a prior-art search tool before filing a patent application to check if a formulation is already documented as traditional knowledge; and second, as defensive protection to prevent others from wrongly patenting India's traditional knowledge abroad.

@@ -102,15 +102,12 @@ export default function AnswerCard({ result }) {
       </div>
 
       <div className="answer-text">
-        {formatAnswer(result?.answer)}
+        {formatAnswer(
+          result?.outputLanguage === "English"
+            ? result?.answer
+            : result?.translatedAnswer || result?.answer
+        )}
       </div>
-
-      {result?.translatedAnswer && result.translatedAnswer !== result.answer && (
-        <div className="translated-answer">
-          <div className="translated-heading"><Languages size={14} /> Translated response · {result.outputLanguage || "Selected language"}</div>
-          <div className="answer-text">{formatAnswer(result.translatedAnswer)}</div>
-        </div>
-      )}
 
       <div className="answer-meta">
         <span><Globe2 size={12} /> {result?.jurisdiction || "Unclear"}</span>
