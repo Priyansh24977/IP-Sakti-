@@ -1,6 +1,6 @@
-import { Leaf, LogOut } from "lucide-react";
+import { Leaf, LogOut, History } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 export default function Header() {
@@ -8,7 +8,6 @@ export default function Header() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    // Get current logged-in user
     async function getUser() {
       const {
         data: { user },
@@ -19,7 +18,6 @@ export default function Header() {
 
     getUser();
 
-    // Keep user state updated
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -44,13 +42,13 @@ export default function Header() {
 
   return (
     <header className="topbar">
-
+      {/* BRAND */}
       <div className="brand">
         <div className="brand-mark">
           <Leaf size={18} />
         </div>
 
-        <div>
+        <div className="brand-text">
           <div className="brand-name">
             IP-SAKTI SAHAYAK
           </div>
@@ -61,6 +59,7 @@ export default function Header() {
         </div>
       </div>
 
+      {/* RIGHT SIDE */}
       <div className="header-right">
 
         <div className="prototype-pill">
@@ -70,10 +69,22 @@ export default function Header() {
         {user && (
           <div className="user-section">
 
+            {/* CONSULTATION HISTORY */}
+            <Link
+              to="/consultations"
+              className="history-link"
+              title="My Consultations"
+            >
+              <History size={16} />
+              <span>My Consultations</span>
+            </Link>
+
+            {/* EMAIL */}
             <span className="user-email">
               {user.email}
             </span>
 
+            {/* LOGOUT */}
             <button
               className="logout-button"
               onClick={handleLogout}
@@ -87,7 +98,6 @@ export default function Header() {
         )}
 
       </div>
-
     </header>
   );
 }
